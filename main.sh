@@ -131,15 +131,14 @@ generateTAR(){
         mv a.tgz "${pkgtgz}.tgz"
         cp "$pkgtgz.tgz" ${MODULE_DIR}
         rm -f "$pkgtgz.tgz"
-        output_log "$package_name $version $url    SUCCESS" "${LOG_DIR}/${MODULE}_report.log"
+        output_log "$package_name $version $url    SUCCESS    $note" "${LOG_DIR}/${MODULE}_report.log"
     else
         mkdir -p ${LOG_DIR}/notfoundlicense
         tar -zcf a.tgz $dir
         mv a.tgz "${LOG_DIR}/notfoundlicense/${pkgtgz}.tgz"
         #cp -rf "${SOURCE_DIR}/$dir" "${LOG_DIR}/notfoundlicense"
-        echo "[ERROR] $package_name $version $url not found LICENSE"  >> ${LOG_DIR}/${MODULE}_error.log
         echo "[ERROR] $package_name $version $url not found LICENSE"  >> ${LOG_DIR}/${MODULE}_license_error.log
-        output_log "$package_name $version $url    not found LICENSE" "${LOG_DIR}/${MODULE}_report.log"
+        output_log "$package_name $version $url    not found LICENSE    $note" "${LOG_DIR}/${MODULE}_report.log"
     fi
 
 }
@@ -203,6 +202,39 @@ downloadSourceByNpm() {
 downloadSourceByGit() {
     while read -r line
     do
+        checkoutVersion(){
+            note=""
+            nam=$1
+            cd $1
+            if ! git checkout $version ; then
+                if ! git checkout "v${version}" ; then
+                    if git tag | grep "$version" ; then
+                        new_version=`git tag | grep "$version"`
+                        # check special version 
+                        if [ $(echo $new_version | wc -w ) == 1 ] ; then
+                            git checkout $new_version
+                        else
+                            output_log "$package_name $version $url    check tags $new_version" "${LOG_DIR}/${MODULE}_checktags.log"
+                            output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
+                            output_log "$package_name $version $url    Can not clone" "${LOG_DIR}/${MODULE}_report.log"
+                            continue
+                        fi
+                    else
+                        if  git checkout master ; then                           
+                            output_log "$package_name $version $url    clone branch master" "${LOG_DIR}/${MODULE}_info.log"
+                            note="master"
+                        else
+                            output_log "[ERROR] Can't checkout master $package_name $version $url" "${LOG_DIR}/${MODULE}_notcheckoutmaster_error.log"
+                            output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
+                            output_log "$package_name $version $url    Can not clone" "${LOG_DIR}/${MODULE}_report.log"
+                            continue
+                        fi
+                    fi
+                fi
+            fi
+        }
+
+
         cd $SOURCE_DIR
 
         arr=($line)
@@ -212,8 +244,8 @@ downloadSourceByGit() {
 
         echo "===================${package_name} ${version}============================"
 
+        # check not version
         if [ "$url" == "NULL" ]; then
-            output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_error.log"
             output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
             output_log "$package_name $version $url    Can not clone" "${LOG_DIR}/${MODULE}_report.log"
             continue
@@ -221,41 +253,32 @@ downloadSourceByGit() {
 
         # check error 404
         if curl -L --head "$url" | grep "HTTP/1.1 404 Not Found" &> /dev/null; then
-            output_log "[ERROR] 404 Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_error.log"
             output_log "[ERROR] 404 Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
             output_log "$package_name $version $url    404 Can not clone" "${LOG_DIR}/${MODULE}_report.log"
             continue
         fi
 
         # check package folder existed or not
-        dir=$(basename "$url" .git)
+        #repo=$(basename "$url" .git)
         
-        if [ -d "$dir" ];then
-            cd $dir
-            if [ $version==`git describe --tags` ] || [ "v$version"==`git describe --tags` ] || [ $version==`git branch` ] || [ "v$version"==`git branch` ]; then
-                echo "[INFO] Existed a package name $package_name with same version $version" >> ${LOG_DIR}/${MODULE}_info.log
-                pkgtgz="${package_name}_${version}"
-                cd $SOURCE_DIR
-                generateTAR $dir $pkgtgz
-                continue
-            fi
-            echo "[INFO] Existed package name $package_name, checkout to version $version" >> ${LOG_DIR}/${MODULE}_info.log
-            git pull
-            if ! git checkout $version; then
-                if ! git checkout "v${version}" ; then
-                    output_log "[ERROR] Can not checkout $version $url" "${LOG_DIR}/${MODULE}_error.log"
-                    output_log "[ERROR] Can not checkout $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
-                    output_log "$package_name $version $url    Can not checkout" "${LOG_DIR}/${MODULE}_report.log"
-                    continue
-                fi
-            fi
+        if grep -w $url "${LOG_DIR}/${MODULE}_datarepo.log" ;then
+            echo "11111111111111111"
+            repo=$(grep -w $url "${LOG_DIR}/${MODULE}_datarepo.log" | awk  '{print $2}')
+            checkoutVersion $repo
         else
-            if ! git clone $url --branch $version; then
-                if ! git clone $url --branch "v${version}" ; then
-                    output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_error.log"
-                    output_log "[ERROR] Can not clone $package_name $version $url" "${LOG_DIR}/${MODULE}_clone_error.log"
-                    output_log "$package_name $version $url    Can not clone" "${LOG_DIR}/${MODULE}_report.log"
-                    continue
+            repo=$(basename "$url" .git)
+            # write data URL and repo clone
+            if ! grep -w $repo "${LOG_DIR}/${MODULE}_datarepo.log" ;then
+                if git clone $url ; then
+                    echo "${url}    ${repo}" >> ${LOG_DIR}/${MODULE}_datarepo.log
+                    checkoutVersion $repo
+                fi
+            else
+                a=$(echo $url | awk -F"/" '{print $4}')
+                if git clone $url "${repo}_${a}" ; then
+                    echo "${url}    ${repo}_${a}" >> ${LOG_DIR}/${MODULE}_datarepo.log
+                    repo_new="${repo}_${a}"
+                    checkoutVersion $repo_new
                 fi
             fi
         fi
@@ -263,7 +286,7 @@ downloadSourceByGit() {
         #copy file to pre-upload/
         cd $SOURCE_DIR
         pkgtgz="${package_name}_${version}"
-        generateTAR $dir $pkgtgz
+        generateTAR $nam $pkgtgz
     done < $1
 }
 
